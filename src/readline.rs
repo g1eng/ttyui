@@ -6,7 +6,7 @@
 //! use std::env;
 //! use ttyui::readline::Buffer;
 //!
-//! let mut buf = Buffer::new();
+//! let mut buf = Buffer::from(&mut String::new());
 //! if let Some(x) = env::args().nth(1) {
 //!     if x == "-d" || x == "--double" {
 //!         buf.double_line_response = true;
@@ -32,7 +32,7 @@ const DEFAULT_TEXT_CAPACITY: usize = 1024;
 
 /// Buffer of a readline instance.
 ///
-pub struct Buffer {
+pub struct Buffer<'a> {
     /// Debug mode or not.
     debug: bool,
     /// Whether the read_line method result newline-containing string at the index where an enter key has been pressed.
@@ -45,16 +45,16 @@ pub struct Buffer {
     /// prefix string for the input area
     prefix: String,
     /// Text payload for the buffer
-    text: String,
+    text: &'a mut String,
 }
 
-impl ToString for Buffer {
+impl<'a> ToString for Buffer<'a> {
     fn to_string(&self) -> String {
         self.text.clone()
     }
 }
 
-impl Drop for Buffer {
+impl<'a> Drop for Buffer<'a> {
     fn drop(&mut self) {
         self.double_line_response = false;
         self.index = 0;
@@ -62,7 +62,7 @@ impl Drop for Buffer {
     }
 }
 
-impl std::fmt::Debug for Buffer {
+impl<'a> std::fmt::Debug for Buffer<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Buffer")
             .field("debug", &self.debug)
@@ -74,38 +74,10 @@ impl std::fmt::Debug for Buffer {
     }
 }
 
-impl Clone for Buffer {
-    fn clone(&self) -> Self {
-        Self {
-            debug: self.debug,
-            double_line_response: self.double_line_response,
-            terminate_on_up_down: self.terminate_on_up_down,
-            term: self.term.clone(),
-            index: self.index,
-            prefix: self.prefix.clone(),
-            text: self.text.clone(),
-        }
-    }
-}
-
-impl Buffer {
-    /// Generate blank buffer.
-    ///
-    pub fn new() -> Self {
-        Buffer {
-            debug: false,
-            double_line_response: false,
-            terminate_on_up_down: false,
-            term: Term::stdout(),
-            index: 0,
-            prefix: String::with_capacity(MAX_PREFIX_CAPACITY),
-            text: String::with_capacity(DEFAULT_TEXT_CAPACITY),
-        }
-    }
-
+impl<'a> Buffer<'a> {
     /// Generate buffer with initial text.
     ///
-    pub fn from(text: &str) -> Self {
+    pub fn from(text: &'a mut String) -> Self {
         Buffer {
             debug: false,
             double_line_response: false,
@@ -113,7 +85,7 @@ impl Buffer {
             term: Term::stdout(),
             index: 0,
             prefix: String::with_capacity(MAX_PREFIX_CAPACITY),
-            text: String::from(text),
+            text,
         }
     }
 
@@ -236,10 +208,9 @@ impl Buffer {
 
         if self.text.len() != 0 {
             let target_id = separater_ids[0];
-            let new_text =
-                self.text[0..target_id].to_string() + &self.text[self.index..self.text.len()];
-            self.text.clear();
-            self.text = new_text;
+            for i in target_id + 1..self.index {
+                self.text.remove(i);
+            }
             self.index = target_id;
             self.term.clear_line()?;
             write!(&self.term, "{}", self.text)?;
@@ -258,10 +229,9 @@ impl Buffer {
             .collect::<Vec<usize>>();
         separater_ids.push(self.text.len());
         let target_id = separater_ids[0];
-        let new_text =
-            self.text[0..self.index].to_string() + &self.text[target_id..self.text.len()];
-        self.text.clear();
-        self.text = new_text;
+        for i in target_id + 1..self.index {
+            self.text.remove(i);
+        }
         self.term.clear_line()?;
         write!(&self.term, "{}", self.text)?;
         self.term.move_cursor_left(self.text.len() - self.index)?;
@@ -300,7 +270,8 @@ impl Buffer {
     pub fn read_line(&mut self) -> io::Result<Key> {
         let k: Key;
 
-        write!(&self.term, "{}", self.prefix)?;
+        write!(&self.term, "{}{}", self.prefix, self.text)?;
+        self.term.move_cursor_to(self.prefix.len(), 0)?;
         loop {
             match self.term.read_key()? {
                 Key::Enter => {
@@ -360,7 +331,8 @@ impl Buffer {
 /// ```
 ///
 pub fn read_line() -> io::Result<String> {
-    let mut buf = Buffer::new();
+    let mut s = &mut String::new();
+    let mut buf = Buffer::from(&mut s);
     buf.read_line()?;
     Ok(buf.to_string())
 }
@@ -373,7 +345,8 @@ pub fn read_line() -> io::Result<String> {
 /// ```
 ///
 pub fn read_line2() -> io::Result<String> {
-    let mut buf = Buffer::new();
+    let mut s = &mut String::new();
+    let mut buf = Buffer::from(&mut s);
     buf.double_line_response = true;
     buf.read_line()?;
     Ok(buf.to_string())
@@ -383,32 +356,24 @@ pub fn read_line2() -> io::Result<String> {
 mod tests {
     use crate::readline::*;
 
+    const DUMMY_WORD: &str = "kabukiza";
     const DUMMY_TEXT: &str = "okachimachi koshigaya inogashira suidobashi ochanomidzu";
     const DUMMY_INDEX: usize = 19;
 
-    fn init_with_word() -> Buffer {
-        let mut buf = Buffer::new();
-        buf.text = "kabukiza".to_string();
-        buf
-    }
-
-    fn init_modifying_buffer() -> Buffer {
-        let mut buf = Buffer::new();
-        buf.text = DUMMY_TEXT.to_string();
-        buf.index = DUMMY_INDEX;
-        buf
-    }
-
     #[test]
     fn test_new() {
-        let b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         assert!(!b.debug);
         assert!(!b.double_line_response);
     }
 
     #[test]
     fn test_home() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let h = b.home().unwrap();
         assert_eq!(h, Key::Home);
         assert_eq!(b.index, 0);
@@ -416,7 +381,9 @@ mod tests {
 
     #[test]
     fn test_end() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let k = b.end().unwrap();
         assert_eq!(k, Key::End);
         assert_eq!(b.index, b.text.len());
@@ -424,39 +391,46 @@ mod tests {
 
     #[test]
     fn test_char_input_at_start_results_a_char() {
-        let mut b = Buffer::new();
+        let mut s = String::new();
+        let mut b = Buffer::from(&mut s);
         let k = b.char('g').unwrap();
         assert_eq!(k, Key::Char('g'));
         assert_eq!(b.index, 1);
-        assert_eq!(b.text, "g".to_string());
+        assert_eq!(*b.text, "g".to_string());
     }
 
     #[test]
     fn test_char_input_before_word_results_inserted_char() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
+
         let mut text_swap = b.text.clone();
         let k = b.char('@').unwrap();
         assert_eq!(k, Key::Char('@'));
         assert_eq!(b.index, 1);
         text_swap.insert(0, '@');
-        assert_eq!(b.text, text_swap);
+        assert_eq!(*b.text, text_swap);
     }
 
     #[test]
     fn test_char_input_between_characters_inserted_char() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let mut text_swap = b.text.clone();
         let k = b.char('g').unwrap();
         assert_eq!(k, Key::Char('g'));
         assert_eq!(b.index, idx_init + 1);
         text_swap.insert(idx_init, 'g');
-        assert_eq!(b.text, text_swap);
+        assert_eq!(*b.text, text_swap);
     }
 
     #[test]
     fn test_string_input_results_modified_word() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let mut text_swap = b.text.clone();
         b.char('i').unwrap();
@@ -466,67 +440,76 @@ mod tests {
         assert_eq!(b.index, idx_init + "itai".len());
         text_swap.insert_str(idx_init, "itai");
         assert_eq!(
-            b.text,
+            *b.text,
             "okachimachi koshigaitaiya inogashira suidobashi ochanomidzu".to_string()
         );
     }
 
     #[test]
     fn test_backspace_after_characters_removes_char() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let mut text_swap = b.text.clone();
         b.backspace().unwrap();
         assert_eq!(b.index, idx_init - 1);
         text_swap.remove(idx_init - 1);
-        assert_eq!(b.text, text_swap);
+        assert_eq!(*b.text, text_swap);
     }
 
     #[test]
     fn test_backspace_before_characters_has_no_effect() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         let idx_init = b.index;
         let text_swap = b.text.clone();
         b.backspace().unwrap();
         assert_eq!(b.index, idx_init);
-        assert_eq!(b.text, text_swap);
+        assert_eq!(*b.text, text_swap);
     }
 
     #[test]
     fn test_delete_before_characters_results_shortened_string() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         let idx_init = b.index;
         let text_init = b.text.clone();
         b.del().unwrap();
         assert_eq!(b.index, idx_init);
-        assert_eq!(b.text, text_init.as_str()[1..text_init.len()]);
+        assert_eq!(*b.text, text_init.as_str()[1..text_init.len()]);
     }
 
     #[test]
     fn test_delete_all_characters_results_blank_string() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         for _ in 0..100 {
             b.del().unwrap();
         }
         assert_eq!(b.index, 0);
-        assert_eq!(b.text, "".to_string());
+        assert_eq!(*b.text, "".to_string());
     }
 
     #[test]
     fn test_delete_many_after_a_character_results_trimmed_string() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let text_init = b.text.clone();
         for _ in 0..100 {
             b.del().unwrap();
         }
         assert_eq!(b.index, idx_init);
-        assert_eq!(b.text, text_init.as_str()[0..idx_init]);
+        assert_eq!(*b.text, text_init.as_str()[0..idx_init]);
     }
 
     #[test]
     fn test_go_word_foward_rearrange_cursor_to_next_word_separator() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         b.word_forward().unwrap();
         assert_eq!(
             b.index,
@@ -536,7 +519,9 @@ mod tests {
 
     #[test]
     fn test_go_word_backward_rearrange_cursor_to_previous_word_head() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         b.word_backword().unwrap();
         assert_eq!(
             b.index,
@@ -546,7 +531,9 @@ mod tests {
 
     #[test]
     fn test_word_backspace_removes_partial_string_from_current_word() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let text_init = b.text.clone();
         let idx_prev_space: usize = DUMMY_TEXT
@@ -558,7 +545,7 @@ mod tests {
         b.word_backspace().unwrap();
         assert_eq!(b.index, idx_prev_space);
         assert_eq!(
-            b.text,
+            *b.text,
             format!(
                 "{}{}",
                 &text_init[0..idx_prev_space],
@@ -569,7 +556,9 @@ mod tests {
 
     #[test]
     fn test_word_delete_removes_partial_string_from_current_word() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         let text_init = b.text.clone();
         let idx_next_space: usize = DUMMY_TEXT
@@ -581,7 +570,7 @@ mod tests {
         b.word_delete().unwrap();
         assert_eq!(b.index, idx_init);
         assert_eq!(
-            b.text,
+            *b.text,
             format!(
                 "{}{}",
                 &text_init[0..idx_init],
@@ -592,7 +581,9 @@ mod tests {
 
     #[test]
     fn test_left_key_after_characters_results_cursor_shift() {
-        let mut b = init_modifying_buffer();
+        let mut s = DUMMY_TEXT.to_string();
+        let mut b = Buffer::from(&mut s);
+        b.index = DUMMY_INDEX;
         let idx_init = b.index;
         b.left().unwrap();
         assert_eq!(b.index, idx_init - 1);
@@ -600,7 +591,8 @@ mod tests {
 
     #[test]
     fn test_right_key_after_all_character_results_cursor_shift() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         b.index = b.text.len();
         let idx_init = b.text.len();
         b.right().unwrap();
@@ -609,7 +601,8 @@ mod tests {
 
     #[test]
     fn test_right_key_before_characters_results_cursor_shift() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         let idx_init = b.index;
         b.right().unwrap();
         assert_eq!(b.index, idx_init + 1);
@@ -617,7 +610,8 @@ mod tests {
 
     #[test]
     fn test_left_key_before_characters_has_no_effect() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         let idx_init = b.index;
         b.left().unwrap();
         assert_eq!(b.index, idx_init);
@@ -625,7 +619,8 @@ mod tests {
 
     #[test]
     fn test_set_prefix() {
-        let mut b = init_with_word();
+        let mut s = DUMMY_WORD.to_string();
+        let mut b = Buffer::from(&mut s);
         let data = "korekara";
         assert_eq!(b.prefix.len(), 0);
         b.set_prefix(data.to_string());

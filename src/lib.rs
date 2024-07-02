@@ -8,3 +8,4 @@
 
 pub mod readline;
 pub mod selector;
+pub mod view;

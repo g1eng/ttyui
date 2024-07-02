@@ -408,7 +408,7 @@ pub fn select_word_from_words(description: &str, items: &[&str]) -> io::Result<S
             }
             Key::Char('q') | Key::Char('Q') | Key::Escape => {
                 term.clear_screen()?;
-                return Err(io::Error::new(io::ErrorKind::Other, "quit"));
+                break;
             }
             Key::Enter => {
                 term.clear_screen()?;
@@ -425,6 +425,7 @@ pub fn select_word_from_words(description: &str, items: &[&str]) -> io::Result<S
             }
         }
     }
+    Err(io::Error::new(io::ErrorKind::Other, "quit"))
 }
 
 #[cfg(test)]
